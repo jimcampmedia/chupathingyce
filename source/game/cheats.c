@@ -51,14 +51,18 @@ symbols in this file:
 #include "cseries.h"
 #include "cseries/errors.h"
 #include "cheats.h"
+#include "spawn_weapons_on_back.h"
 #include "cache/cache_files.h"
 #include "camera/director.h"
 #include "camera/observer.h"
+#include "cutscene/cinematics.h"
+#include "game/game.h"
 #include "game/game_globals.h"
 #include "game/players.h"
 #include "hs/hs.h"
 #include "input/input.h"
 #include "interface/terminal.h"
+#include "interface/ui_widget.h"
 #include "items/weapon_definitions.h"
 #include "main/console.h"
 #include "math/real_math.h"
@@ -70,6 +74,8 @@ symbols in this file:
 #ifdef HALO_64BIT
 #include "cseries/errors.h"
 #endif
+
+int config_boolean(const char *name);
 
 /* ---------- constants */
 
@@ -97,12 +103,30 @@ static char cheat_strings[MAXIMUM_CHEATS][MAXIMUM_CHEAT_LENGTH] = {0};
  * Its original name and purpose are unknown; the name is descriptive only. */
 static boolean cheats_unused_flag = FALSE;
 
+/* port: last tick's Back hold count, and the tick weapons were last dropped,
+per local player (game.spawn_weapons_on_back) */
+static byte spawn_weapons_on_back_held[MAXIMUM_LOCAL_PLAYERS];
+static long spawn_weapons_on_back_last_tick[MAXIMUM_LOCAL_PLAYERS];
+
 /* ---------- code */
+
+static void spawn_weapons_on_back_reset(
+	void)
+{
+	short local_player_index;
+
+	csmemset(spawn_weapons_on_back_held, 0, sizeof(spawn_weapons_on_back_held));
+	for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
+		spawn_weapons_on_back_last_tick[local_player_index] = NONE;
+
+	return;
+}
 
 void cheats_initialize(
 	void)
 {
 	csmemset(cheat_strings, 0, sizeof(cheat_strings));
+	spawn_weapons_on_back_reset();
 
 	return;
 }
@@ -198,10 +222,61 @@ void cheats_network_client_enforce(
 	return;
 }
 
+/* port: tap Back (View) or the scoreboard key to drop the map's guns around
+that local player. Host only: object_new is replicated to clients. Hold
+Back is still the scoreboard. Menus and cutscenes leave Back alone. */
+static void spawn_weapons_on_back_update(
+	void)
+{
+	boolean enabled = config_boolean("game.spawn_weapons_on_back") != 0;
+	short local_player_index;
+
+	if (main_menu_is_active() || cinematic_in_progress() || network_game_distributed_client())
+		return;
+
+	for (local_player_index = local_player_get_next(NONE);
+		local_player_index != NONE;
+		local_player_index = local_player_get_next(local_player_index))
+	{
+		const struct gamepad_state *gamepad;
+		byte now;
+		byte previous;
+		long player_index;
+		long now_tick;
+
+		if (local_player_index < 0 || local_player_index >= MAXIMUM_LOCAL_PLAYERS)
+			continue;
+
+		gamepad = input_get_gamepad_state(local_player_index);
+		now = gamepad ? gamepad->buttons[_gamepad_binary_button_back] : 0;
+		previous = spawn_weapons_on_back_held[local_player_index];
+		spawn_weapons_on_back_held[local_player_index] = now;
+
+		if (!enabled || ui_widgets_active_for_local_player(local_player_index))
+			continue;
+		if (!spawn_weapons_on_back_is_tap(previous, now))
+			continue;
+
+		player_index = local_player_get_player_index(local_player_index);
+		now_tick = game_time_get();
+		if (player_index == NONE ||
+			!spawn_weapons_on_back_cooldown_ready(now_tick, spawn_weapons_on_back_last_tick[local_player_index]))
+		{
+			continue;
+		}
+
+		cheat_spawn_weapons_for_player(player_index);
+		spawn_weapons_on_back_last_tick[local_player_index] = now_tick;
+	}
+
+	return;
+}
+
 void cheats_update(
 	void)
 {
 	cheats_network_client_enforce();
+	spawn_weapons_on_back_update();
 	if (cheat.controller_enabled)
 	{
 		short local_player_index;
@@ -313,6 +388,7 @@ void cheats_initialize_for_new_map(
 	void)
 {
 	cheats_load();
+	spawn_weapons_on_back_reset();
 
 	return;
 }
@@ -370,44 +446,55 @@ void cheat_active_camouflage(
 	return;
 }
 
+static void cheat_objects_for_player(
+	long player_index,
+	struct tag_reference *references,
+	short reference_count)
+{
+	struct player_datum *player;
+	real_point3d origin;
+	real_vector3d forward, up;
+	short reference_index;
+
+	if (player_index==NONE || !references || reference_count<=0)
+		return;
+
+	player = player_get(player_index);
+	if (player->unit_index==NONE)
+		return;
+
+	object_get_origin(player->unit_index, &origin);
+	object_get_orientation(player->unit_index, &forward, &up);
+
+	for (reference_index = 0; reference_index<reference_count; reference_index++)
+	{
+		if (references[reference_index].index!=NONE)
+		{
+			struct object_placement_data data;
+			real angle_separation = CEILING(2*_pi/reference_count, _pi/8);
+			real angle = arctangent(forward.i, forward.j)+
+				(reference_index-reference_count/2)*angle_separation;
+
+			object_placement_data_new(&data, references[reference_index].index, NONE);
+
+			data.position.x = cosine(angle)*1.5f+origin.x;
+			data.position.y = sine(angle)*1.5f+origin.y;
+			data.position.z = origin.z+0.8f;
+			data.forward = forward;
+			data.up = up;
+
+			object_new(&data);
+		}
+	}
+
+	return;
+}
+
 static void cheat_objects(
 	struct tag_reference *references,
 	short reference_count)
 {
-	long player_index = cheat_player_index();
-
-	if (player_index!=NONE)
-	{
-		struct player_datum *player = player_get(player_index);
-		struct unit_datum *unit = unit_get(player->unit_index);
-		real_point3d origin;
-		real_vector3d forward, up;
-		short reference_index;
-
-		object_get_origin(player->unit_index, &origin);
-		object_get_orientation(player->unit_index, &forward, &up);
-
-		for (reference_index = 0; reference_index<reference_count; reference_index++)
-		{
-			if (references[reference_index].index!=NONE)
-			{
-				struct object_placement_data data;
-				real angle_separation = CEILING(2*_pi/reference_count, _pi/8);
-				real angle = arctangent(forward.i, forward.j)+
-					(reference_index-reference_count/2)*angle_separation;
-
-				object_placement_data_new(&data, references[reference_index].index, NONE);
-
-				data.position.x = cosine(angle)*1.5f+origin.x;
-				data.position.y = sine(angle)*1.5f+origin.y;
-				data.position.z = origin.z+0.8f;
-				data.forward = forward;
-				data.up = up;
-
-				object_new(&data);
-			}
-		}
-	}
+	cheat_objects_for_player(cheat_player_index(), references, reference_count);
 
 	return;
 }
@@ -454,6 +541,57 @@ void cheat_all_weapons(
 		}
 
 		cheat_objects(references, reference_count);
+	}
+
+	return;
+}
+
+/* the map's guns around this player: the globals' weapon list without the
+ball, flag or grenades. Empty slots (the Xbox has no flamethrower) are
+skipped. If the map has none of those, the same set cheat_all_weapons uses. */
+void cheat_spawn_weapons_for_player(
+	long player_index)
+{
+	struct game_globals *globals = scenario_get_game_globals();
+	struct tag_reference references[10];
+	short reference_count = 0;
+	short list_index;
+
+	csmemset(references, 0, sizeof(references));
+	if (globals)
+	{
+		short list_count = (short)MIN(globals->weapon_list.count, 10);
+
+		for (list_index = 0; list_index < list_count; list_index++)
+		{
+			struct tag_reference *reference = TAG_BLOCK_TRY_AND_GET_ELEMENT(
+				&globals->weapon_list, list_index, struct tag_reference);
+
+			if (reference && reference->index != NONE)
+				references[reference_count++] = *reference;
+		}
+	}
+
+	if (reference_count > 0)
+	{
+		cheat_objects_for_player(player_index, references, reference_count);
+	}
+	else
+	{
+		struct tag_reference fallback[MAXIMUM_CHEATS];
+		struct tag_iterator iterator;
+		long tag_index;
+
+		csmemset(fallback, 0, sizeof(fallback));
+		tag_iterator_new(&iterator, WEAPON_DEFINITION_TAG);
+		for (tag_index = tag_iterator_next(&iterator);
+			tag_index != NONE && reference_count < NUMBEROF(fallback);
+			tag_index = tag_iterator_next(&iterator))
+		{
+			fallback[reference_count].index = tag_index;
+			reference_count++;
+		}
+		cheat_objects_for_player(player_index, fallback, reference_count);
 	}
 
 	return;

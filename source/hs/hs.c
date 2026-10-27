@@ -16010,6 +16010,9 @@ static boolean hs_expression_changes_no_game(
 static boolean hs_compile_and_evaluate_command(
 	char const *expression);
 
+int config_boolean(const char *name);
+int config_write_boolean(const char *name, int value);
+
 /* port: the text after the host's command `word` ("ban", "kick") that an
 expression starts with (spaces and an opening parenthesis before it, in
 either case, then a space or the end), else NULL */
@@ -16062,6 +16065,72 @@ static boolean hs_compile_and_evaluate_command(
 	(players.c; a client is told it is the host's) */
 	if (hs_host_player_command(expression, "bringto"))
 		return players_coop_bring_to_host();
+	/* port: game.spawn_weapons_on_back, a local setting: tap Back to drop
+	the map's guns. Only the host's tap spawns; clients still see them */
+	{
+		char const *text = hs_host_player_command(expression, "spawn_weapons_on_back");
+
+		if (text)
+		{
+			boolean enabled;
+			char const *end;
+
+			while (*text == ' ' || *text == '\t' || *text == '"')
+				text++;
+			if (*text && *text != ')')
+			{
+				if (!csstrncmp(text, "true", 4))
+					end = text + 4;
+				else if (!csstrncmp(text, "on", 2))
+					end = text + 2;
+				else if (*text == '1')
+					end = text + 1;
+				else
+					end = NULL;
+				if (end && (*end == 0 || *end == ' ' || *end == '\t' || *end == '"' || *end == ')'))
+				{
+					if (!config_write_boolean("game.spawn_weapons_on_back", TRUE))
+					{
+						console_warning("could not write game.spawn_weapons_on_back");
+						return FALSE;
+					}
+				}
+				else
+				{
+					if (!csstrncmp(text, "false", 5))
+						end = text + 5;
+					else if (!csstrncmp(text, "off", 3))
+						end = text + 3;
+					else if (*text == '0')
+						end = text + 1;
+					else
+						end = NULL;
+					if (end && (*end == 0 || *end == ' ' || *end == '\t' || *end == '"' || *end == ')'))
+					{
+						if (!config_write_boolean("game.spawn_weapons_on_back", FALSE))
+						{
+							console_warning("could not write game.spawn_weapons_on_back");
+							return FALSE;
+						}
+					}
+					else
+					{
+						console_printf(FALSE,
+							"spawn_weapons_on_back [true|false]: tap Back to drop guns (host only)");
+						return FALSE;
+					}
+				}
+			}
+			enabled = config_boolean("game.spawn_weapons_on_back") != 0;
+			if (enabled)
+				console_printf(FALSE,
+					"spawn_weapons_on_back is on: tap Back (View) to drop guns. Hold Back for the scoreboard. Only the host's tap drops them.");
+			else
+				console_printf(FALSE,
+					"spawn_weapons_on_back is off. Type spawn_weapons_on_back true to turn it on.");
+			return TRUE;
+		}
+	}
 	/* port: profile_reset_campaign, which clears the first player's
 	profile's campaign progress (player_ui_reset_campaign_progress) once
 	confirmed: "profile_reset_campaign yes" */
