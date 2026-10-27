@@ -40,6 +40,9 @@ void cheat_active_camouflage(
 	void);
 void cheat_all_weapons(
 	void);
+/* port: the map's guns around this player (game.spawn_weapons_on_back) */
+void cheat_spawn_weapons_for_player(
+	long player_index);
 void cheat_all_powerups(
 	void);
 void cheat_all_vehicles(

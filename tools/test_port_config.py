@@ -431,6 +431,25 @@ def test_renamed_setting(program, directory, defaults, kind):
 		check(case.text() == before, f"renamed/{name}: the file changed on the next start")
 
 
+def test_spawn_weapons_on_back_off_by_default(program, directory, defaults, kind):
+	"""game.spawn_weapons_on_back stays off unless the player turns it on."""
+	case = Case(program, directory / "spawn_weapons_on_back")
+	values, _ = case.get("game.spawn_weapons_on_back")
+	check(values["game.spawn_weapons_on_back"] == "false",
+		f"default is {values['game.spawn_weapons_on_back']}, not false")
+	text = case.text()
+	lines, commented = value_lines(text, "spawn_weapons_on_back")
+	check(not lines and len(commented) == 1,
+		f"new file: spawn_weapons_on_back is not commented out once: {lines} {commented}")
+	case.run("write", "game.spawn_weapons_on_back", "true")
+	values, _ = case.get("game.spawn_weapons_on_back")
+	check(values["game.spawn_weapons_on_back"] == "true",
+		f"write true left {values['game.spawn_weapons_on_back']}")
+	lines, _ = value_lines(case.text(), "spawn_weapons_on_back")
+	check(lines == ["spawn_weapons_on_back = true"],
+		f"written value not in the file: {lines}")
+
+
 def test_old_browser_address(program, directory, defaults, kind):
 	"""The community site's first address, written out as the default by an
 	earlier version, follows to stats.chupathingy.org (the same server); any
@@ -460,7 +479,7 @@ def main():
 			program = build(arguments.cc, kind, directory / kind)
 			for test in (test_new_file, test_previous_release_file, test_file_without_the_settings,
 				test_readded_by_older_version, test_before_config_version, test_renamed_setting,
-				test_old_browser_address):
+				test_old_browser_address, test_spawn_weapons_on_back_off_by_default):
 				try:
 					test(program, directory / kind / "cases", DEFAULTS[kind], kind)
 					print(f"ok   {kind}: {test.__name__}")

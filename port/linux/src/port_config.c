@@ -592,6 +592,12 @@ static const struct config_setting config_settings[] =
 		_platform_all | _platform_xbox,
 		"Let a game you host start with only you. Others can join in progress." },
 
+	{ "game.spawn_weapons_on_back", _config_boolean, "false", "HALO_SPAWN_WEAPONS_ON_BACK", _environment_value,
+		_platform_all | _platform_xbox,
+		"Tap the controller's Back (View) button, or the scoreboard key, to drop\n"
+		"the map's guns around you. Off by default. Only the host's tap drops\n"
+		"them; clients see and can pick them up. Hold Back for the scoreboard." },
+
 	{ "game.downloaded_maps", _config_string, "\"\"", "HALO_DOWNLOADED_MAPS", _environment_value, _platform_all,
 		"Maps treated as downloaded, separated by commas (bloodgulch,\n"
 		"hugeass@ce), or \"*\" for all. Their scripts can't change your settings\n"
